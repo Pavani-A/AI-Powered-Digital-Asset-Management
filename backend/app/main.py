@@ -3,7 +3,7 @@ from uuid import UUID
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from sqlalchemy import text
-
+from fastapi.middleware.cors import CORSMiddleware
 from backend.app.db.database import engine
 from backend.app.services.indexing_service import (
     create_indexing_job,
@@ -23,7 +23,18 @@ app = FastAPI(
     title="AI-Powered Digital Asset Management",
     version="0.1.0",
 )
+origins = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 @app.get("/health")
 def health_check():
