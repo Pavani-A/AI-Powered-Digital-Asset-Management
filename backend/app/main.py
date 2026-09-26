@@ -4,9 +4,11 @@ from backend.app.services.qdrant_service import ensure_collection, get_collectio
 from backend.app.db.database import engine
 from backend.app.services.scanner_service import scan_library
 from uuid import UUID
-from fastapi import HTTPException
 from backend.app.services.ollama_service import generate_image_description
 from backend.app.services.search_service import search_assets
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
+from backend.app.services.media_service import get_asset_file
 app = FastAPI(
     title="AI-Powered Digital Asset Management",
     version="0.1.0",
@@ -148,5 +150,29 @@ def search(
     except ValueError as exc:
         raise HTTPException(
             status_code=400,
+            detail=str(exc),
+        )
+
+@app.get("/assets/{asset_id}/file")
+def get_asset_file_response(asset_id: UUID):
+    try:
+        asset = get_asset_file(asset_id)
+
+        return FileResponse(
+            path=asset["original_path"],
+            media_type=asset["mime_type"],
+            filename=asset["filename"],
+            content_disposition_type="inline",
+        )
+
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=str(exc),
+        )
+
+    except FileNotFoundError as exc:
+        raise HTTPException(
+            status_code=404,
             detail=str(exc),
         )
