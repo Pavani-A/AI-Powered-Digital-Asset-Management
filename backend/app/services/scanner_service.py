@@ -1,5 +1,5 @@
 from __future__ import annotations
-
+import pymupdf
 import hashlib
 import json
 import mimetypes

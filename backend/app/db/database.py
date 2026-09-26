@@ -9,6 +9,11 @@ class Settings(BaseSettings):
     qdrant_url: str
     ollama_base_url: str
 
+    ollama_vision_model: str = "moondream:latest"
+    ai_request_timeout_seconds: int = 180
+    vision_max_image_size: int = 384
+    vision_jpeg_quality: int = 50
+
     model_config = SettingsConfigDict(
         env_file=".env",
         extra="ignore",
