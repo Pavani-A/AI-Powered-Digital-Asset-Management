@@ -7,8 +7,12 @@ from sqlalchemy import text
 
 from backend.app.db.database import SessionLocal
 from backend.app.services.embedding_service import generate_embedding
-from backend.app.services.ollama_service import generate_image_description
+from backend.app.services.ollama_service import (
+    generate_image_description,
+    generate_video_description,
+)
 from backend.app.services.qdrant_service import upsert_asset_embedding
+from backend.app.services.video_service import extract_video_frames
 
 
 def index_asset(asset_id: UUID) -> dict:
@@ -16,8 +20,11 @@ def index_asset(asset_id: UUID) -> dict:
     Process one asset through AI enrichment, embedding generation,
     and Qdrant indexing.
 
-    Currently, image AI enrichment is supported.
-    PDF and video enrichment will be added in their respective stages.
+    Supported AI enrichment:
+    - Images: Moondream analyzes the image.
+    - Videos: sampled frames are analyzed by Moondream.
+
+    PDF enrichment will be added separately.
     """
     db = SessionLocal()
 
@@ -53,7 +60,9 @@ def index_asset(asset_id: UUID) -> dict:
         asset_path = Path(asset["original_path"])
 
         if not asset_path.exists():
-            error_message = f"Asset file does not exist: {asset_path}"
+            error_message = (
+                f"Asset file does not exist: {asset_path}"
+            )
 
             db.execute(
                 text(
@@ -77,13 +86,8 @@ def index_asset(asset_id: UUID) -> dict:
 
         description = asset["description"]
 
-        # Generate AI understanding only when it does not already exist.
+        # Generate AI understanding when it does not already exist.
         if not description:
-            if asset["file_type"] != "image":
-                raise NotImplementedError(
-                    f"AI enrichment for '{asset['file_type']}' "
-                    "is not implemented yet."
-                )
 
             db.execute(
                 text(
@@ -100,7 +104,27 @@ def index_asset(asset_id: UUID) -> dict:
             )
             db.commit()
 
-            description = generate_image_description(asset_path)
+            if asset["file_type"] == "image":
+                description = generate_image_description(
+                    asset_path
+                )
+
+            elif asset["file_type"] == "video":
+                frames = extract_video_frames(
+                    asset_path,
+                    max_frames=5,
+                    max_image_size=384,
+                )
+
+                description = generate_video_description(
+                    frames
+                )
+
+            else:
+                raise NotImplementedError(
+                    f"AI enrichment for '{asset['file_type']}' "
+                    "is not implemented yet."
+                )
 
             db.execute(
                 text(
@@ -152,6 +176,7 @@ def index_asset(asset_id: UUID) -> dict:
             "status": "indexed",
             "asset_id": str(asset_id),
             "filename": asset["filename"],
+            "file_type": asset["file_type"],
         }
 
     except Exception as exc:

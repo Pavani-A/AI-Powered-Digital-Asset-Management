@@ -43,27 +43,16 @@ def prepare_image(path: Path) -> str:
     return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
 
-def generate_image_description(path: str | Path) -> str:
+def _generate_from_encoded_image(
+    encoded_image: str,
+    prompt: str,
+) -> str:
     """
-    Ask the configured local vision model to describe an image.
+    Send one encoded image to the configured local vision model.
     """
-    image_path = Path(path)
-
-    if not image_path.exists():
-        raise FileNotFoundError(
-            f"Asset not found: {image_path}"
-        )
-
-    encoded_image = prepare_image(image_path)
-
     payload = {
         "model": settings.ollama_vision_model,
-        "prompt": (
-            "Analyze this image for a digital asset management search system. "
-            "Describe the main subject, objects, scene, activities, colors, "
-            "and notable visual details. Mention visible text only when clearly "
-            "readable. Use concise factual language. Do not invent details."
-        ),
+        "prompt": prompt,
         "images": [encoded_image],
         "stream": False,
         "options": {
@@ -99,3 +88,96 @@ def generate_image_description(path: str | Path) -> str:
         )
 
     return description
+
+
+def generate_image_description(
+    path: str | Path,
+) -> str:
+    """
+    Generate searchable visual metadata for an image.
+    """
+    image_path = Path(path)
+
+    if not image_path.exists():
+        raise FileNotFoundError(
+            f"Asset not found: {image_path}"
+        )
+
+    encoded_image = prepare_image(image_path)
+
+    return _generate_from_encoded_image(
+        encoded_image,
+        (
+            "Analyze this image for a digital asset management "
+            "search system. Describe the main subject, objects, "
+            "scene, activities, colors, and notable visual details. "
+            "Mention visible text only when clearly readable. "
+            "Use concise factual language. Do not invent details."
+        ),
+    )
+
+
+def generate_video_description(
+    frames: list[dict],
+) -> str:
+    """
+    Analyze sampled video frames one at a time and combine
+    their descriptions into searchable video metadata.
+
+    Each frame is processed independently to reduce local
+    inference memory usage.
+    """
+    if not frames:
+        raise ValueError(
+            "Cannot generate a video description without frames."
+        )
+
+    descriptions: list[str] = []
+    seen_descriptions: set[str] = set()
+
+    for frame in frames:
+        frame_bytes = frame.get("bytes")
+        timestamp = frame.get("timestamp")
+
+        if not frame_bytes:
+            continue
+
+        encoded_image = base64.b64encode(
+            frame_bytes
+        ).decode("utf-8")
+
+        description = _generate_from_encoded_image(
+            encoded_image,
+            (
+                "This is a sampled frame from a video. "
+                "Describe the visible people, objects, activities, "
+                "scene, and important visual details that could help "
+                "someone search for this video. "
+                "Use concise factual language. "
+                "Do not invent details."
+            ),
+        )
+
+        normalized = description.lower().strip()
+
+        if normalized in seen_descriptions:
+            continue
+
+        seen_descriptions.add(normalized)
+
+        if timestamp is not None:
+            descriptions.append(
+                f"At {timestamp:.1f}s: {description}"
+            )
+        else:
+            descriptions.append(description)
+
+    if not descriptions:
+        raise RuntimeError(
+            "No usable descriptions were generated from video frames."
+        )
+
+    return (
+        "Video visual summary based on sampled frames. "
+        + " ".join(descriptions)
+    )

@@ -14,6 +14,9 @@ class Settings(BaseSettings):
     vision_max_image_size: int = 384
     vision_jpeg_quality: int = 50
 
+    ffprobe_path: str
+    ffmpeg_path: str
+
     model_config = SettingsConfigDict(
         env_file=".env",
         extra="ignore",
@@ -22,10 +25,12 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
+
 engine = create_engine(
     settings.database_url,
     pool_pre_ping=True,
 )
+
 
 SessionLocal = sessionmaker(
     bind=engine,
@@ -36,7 +41,9 @@ SessionLocal = sessionmaker(
 
 def get_db():
     db = SessionLocal()
+
     try:
         yield db
+
     finally:
         db.close()

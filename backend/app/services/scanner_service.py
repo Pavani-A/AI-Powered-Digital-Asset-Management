@@ -1,5 +1,5 @@
 from __future__ import annotations
-import pymupdf
+
 import hashlib
 import json
 import mimetypes
@@ -8,11 +8,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import fitz
+import pymupdf
 from PIL import Image
 from sqlalchemy import text
 
-from backend.app.db.database import SessionLocal
+from backend.app.db.database import SessionLocal, settings
 
 
 SUPPORTED_EXTENSIONS = {
@@ -40,8 +40,11 @@ SUPPORTED_EXTENSIONS = {
 }
 
 
-def sha256_file(path: Path, chunk_size: int = 1024 * 1024) -> str:
-    """Calculate SHA-256 without loading the entire file into memory."""
+def sha256_file(
+    path: Path,
+    chunk_size: int = 1024 * 1024,
+) -> str:
+    """Calculate SHA-256 without loading the whole file into memory."""
     digest = hashlib.sha256()
 
     with path.open("rb") as file:
@@ -76,16 +79,16 @@ def extract_image_metadata(path: Path) -> dict[str, Any]:
 
 
 def extract_pdf_metadata(path: Path) -> dict[str, Any]:
-    with fitz.open(path) as document:
+    with pymupdf.open(path) as document:
         return {
             "page_count": document.page_count,
         }
 
 
 def extract_video_metadata(path: Path) -> dict[str, Any]:
-    """Extract basic video metadata using ffprobe."""
+    """Extract basic video metadata using the configured ffprobe executable."""
     command = [
-        "ffprobe",
+        settings.ffprobe_path,
         "-v",
         "error",
         "-show_entries",
@@ -123,30 +126,45 @@ def extract_video_metadata(path: Path) -> dict[str, Any]:
     if rate and rate != "0/0":
         try:
             numerator, denominator = rate.split("/")
+
             if float(denominator) != 0:
                 frame_rate = float(numerator) / float(denominator)
+
         except (ValueError, ZeroDivisionError):
             frame_rate = None
 
     return {
         "width": video_stream.get("width"),
         "height": video_stream.get("height"),
-        "duration_seconds": float(duration) if duration else None,
+        "duration_seconds": (
+            float(duration)
+            if duration
+            else None
+        ),
         "frame_rate": frame_rate,
     }
 
 
-def extract_metadata(path: Path, file_type: str) -> dict[str, Any]:
+def extract_metadata(
+    path: Path,
+    file_type: str,
+) -> dict[str, Any]:
     metadata: dict[str, Any] = {}
 
     if file_type == "image":
-        metadata.update(extract_image_metadata(path))
+        metadata.update(
+            extract_image_metadata(path)
+        )
 
     elif file_type == "video":
-        metadata.update(extract_video_metadata(path))
+        metadata.update(
+            extract_video_metadata(path)
+        )
 
     elif file_type == "pdf":
-        metadata.update(extract_pdf_metadata(path))
+        metadata.update(
+            extract_pdf_metadata(path)
+        )
 
     return metadata
 
@@ -168,7 +186,10 @@ def is_unchanged(
     )
 
 
-def get_existing_asset(db, path_str: str) -> dict[str, Any] | None:
+def get_existing_asset(
+    db,
+    path_str: str,
+) -> dict[str, Any] | None:
     result = db.execute(
         text(
             """
@@ -183,13 +204,19 @@ def get_existing_asset(db, path_str: str) -> dict[str, Any] | None:
             WHERE original_path = :original_path
             """
         ),
-        {"original_path": path_str},
+        {
+            "original_path": path_str,
+        },
     ).mappings().first()
 
     return dict(result) if result else None
 
 
-def sha_exists(db, sha256: str, path_str: str) -> bool:
+def sha_exists(
+    db,
+    sha256: str,
+    path_str: str,
+) -> bool:
     result = db.execute(
         text(
             """
@@ -323,9 +350,11 @@ def update_asset(
     )
 
 
-def scan_library(data_root: str | Path = "data") -> dict[str, int]:
+def scan_library(
+    data_root: str | Path = "data",
+) -> dict[str, int]:
     """
-    Scan the local DAM library and register supported assets in PostgreSQL.
+    Scan the local DAM library and register supported assets.
 
     Unchanged files are skipped.
     New files are inserted.
@@ -335,12 +364,15 @@ def scan_library(data_root: str | Path = "data") -> dict[str, int]:
     root = Path(data_root).resolve()
 
     if not root.exists():
-        raise FileNotFoundError(f"Data directory does not exist: {root}")
+        raise FileNotFoundError(
+            f"Data directory does not exist: {root}"
+        )
 
     files = [
         path
         for path in root.rglob("*")
-        if path.is_file() and detect_file_type(path) is not None
+        if path.is_file()
+        and detect_file_type(path) is not None
     ]
 
     db = SessionLocal()
@@ -373,10 +405,11 @@ def scan_library(data_root: str | Path = "data") -> dict[str, int]:
                     stats["skipped"] += 1
                     continue
 
-                existing = get_existing_asset(db, path_str)
+                existing = get_existing_asset(
+                    db,
+                    path_str,
+                )
 
-                # Incremental indexing:
-                # unchanged size + modification time means no work is needed.
                 if existing and is_unchanged(
                     existing,
                     size_bytes,
@@ -387,12 +420,19 @@ def scan_library(data_root: str | Path = "data") -> dict[str, int]:
 
                 sha256 = sha256_file(path)
 
-                # Prevent storing multiple copies of identical content.
-                if sha_exists(db, sha256, path_str):
+                if sha_exists(
+                    db,
+                    sha256,
+                    path_str,
+                ):
                     stats["duplicates"] += 1
                     continue
 
-                metadata = extract_metadata(path, file_type)
+                metadata = extract_metadata(
+                    path,
+                    file_type,
+                )
+
                 mime_type = get_mime_type(path)
 
                 if existing:
@@ -407,6 +447,7 @@ def scan_library(data_root: str | Path = "data") -> dict[str, int]:
                         modified_at=modified_at,
                         metadata=metadata,
                     )
+
                     stats["updated"] += 1
 
                 else:
@@ -420,6 +461,7 @@ def scan_library(data_root: str | Path = "data") -> dict[str, int]:
                         modified_at=modified_at,
                         metadata=metadata,
                     )
+
                     stats["indexed"] += 1
 
                 db.commit()

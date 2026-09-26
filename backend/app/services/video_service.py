@@ -5,11 +5,13 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from backend.app.db.database import settings
+
 
 def get_video_duration(path: Path) -> float:
     """Get video duration in seconds using ffprobe."""
     command = [
-        "ffprobe",
+        settings.ffprobe_path,
         "-v",
         "error",
         "-show_entries",
@@ -29,7 +31,9 @@ def get_video_duration(path: Path) -> float:
     duration = result.stdout.strip()
 
     if not duration:
-        raise RuntimeError("Could not determine video duration.")
+        raise RuntimeError(
+            "Could not determine video duration."
+        )
 
     return float(duration)
 
@@ -47,7 +51,7 @@ def choose_sample_timestamps(
         return [0.0]
 
     if duration < 3:
-        return [0.0]
+        return [duration / 2]
 
     frame_count = min(max_frames, 5)
 
@@ -100,10 +104,12 @@ def extract_video_frames(
         temp_path = Path(temp_dir)
 
         for index, timestamp in enumerate(timestamps):
-            output_path = temp_path / f"frame_{index:02d}.jpg"
+            output_path = (
+                temp_path / f"frame_{index:02d}.jpg"
+            )
 
             command = [
-                "ffmpeg",
+                settings.ffmpeg_path,
                 "-y",
                 "-ss",
                 str(timestamp),
@@ -137,7 +143,6 @@ def extract_video_frames(
                     f"{output_path}"
                 )
 
-            # Read the bytes while the temporary file exists.
             frame_bytes = output_path.read_bytes()
 
             frames.append(
