@@ -1,14 +1,24 @@
-from fastapi import FastAPI
-from sqlalchemy import text
-from backend.app.services.qdrant_service import ensure_collection, get_collection_info
-from backend.app.db.database import engine
-from backend.app.services.scanner_service import scan_library
 from uuid import UUID
-from backend.app.services.ollama_service import generate_image_description
-from backend.app.services.search_service import search_assets
-from fastapi import FastAPI, HTTPException
+
+from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.responses import FileResponse
+from sqlalchemy import text
+
+from backend.app.db.database import engine
+from backend.app.services.indexing_service import (
+    create_indexing_job,
+    index_asset,
+)
 from backend.app.services.media_service import get_asset_file
+from backend.app.services.ollama_service import generate_image_description
+from backend.app.services.qdrant_service import (
+    ensure_collection,
+    get_collection_info,
+)
+from backend.app.services.scanner_service import scan_library
+from backend.app.services.search_service import search_assets
+
+
 app = FastAPI(
     title="AI-Powered Digital Asset Management",
     version="0.1.0",
@@ -33,9 +43,11 @@ def database_health_check():
         "database": "postgresql",
     }
 
+
 @app.get("/health/qdrant")
 def qdrant_health_check():
     ensure_collection()
+
     info = get_collection_info()
 
     return {
@@ -44,9 +56,182 @@ def qdrant_health_check():
         "vectors_count": info.points_count,
         "vector_size": 768,
     }
+
+
+# ---------------------------------------------------------
+# LIBRARY SCANNING
+# ---------------------------------------------------------
+
+
 @app.post("/index/scan")
 def scan_assets():
     return scan_library("data")
+
+
+# ---------------------------------------------------------
+# BACKGROUND INDEXING
+# ---------------------------------------------------------
+
+
+def run_indexing_job(job_id: UUID) -> None:
+    """
+    Index all assets that are not currently indexed.
+
+    Each asset updates the persistent indexing_jobs record,
+    so the frontend can poll the job progress endpoint.
+    """
+    with engine.connect() as connection:
+        assets = connection.execute(
+            text(
+                """
+                SELECT id
+                FROM assets
+                WHERE status != 'indexed'
+                ORDER BY created_at ASC
+                """
+            )
+        ).scalars().all()
+
+    for asset_id in assets:
+        try:
+            index_asset(
+                UUID(str(asset_id)),
+                job_id=job_id,
+            )
+        except Exception:
+            # index_asset already records the failed asset and
+            # increments the failed count for the indexing job.
+            # Continue processing the remaining assets.
+            continue
+
+
+@app.post("/index/start")
+def start_indexing(background_tasks: BackgroundTasks):
+    """
+    Start background indexing for all assets that are not indexed.
+
+    Returns the job ID immediately so the frontend can poll
+    /index/jobs/{job_id} for progress.
+    """
+    with engine.connect() as connection:
+        assets = connection.execute(
+            text(
+                """
+                SELECT COUNT(*)
+                FROM assets
+                WHERE status != 'indexed'
+                """
+            )
+        ).scalar_one()
+
+    total_files = int(assets)
+
+    job_id = create_indexing_job(
+        total_files=total_files
+    )
+
+    # No assets need processing.
+    if total_files == 0:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    """
+                    UPDATE indexing_jobs
+                    SET
+                        status = 'completed',
+                        completed_at = NOW()
+                    WHERE id = :job_id
+                    """
+                ),
+                {
+                    "job_id": job_id,
+                },
+            )
+
+        return {
+            "status": "completed",
+            "job_id": str(job_id),
+            "total_files": 0,
+            "message": "All assets are already indexed.",
+        }
+
+    background_tasks.add_task(
+        run_indexing_job,
+        job_id,
+    )
+
+    return {
+        "status": "started",
+        "job_id": str(job_id),
+        "total_files": total_files,
+    }
+
+
+@app.get("/index/jobs/{job_id}")
+def get_indexing_job_status(job_id: UUID):
+    """
+    Return the persistent progress of an indexing job.
+    """
+    with engine.connect() as connection:
+        job = connection.execute(
+            text(
+                """
+                SELECT
+                    id,
+                    total_files,
+                    processed_files,
+                    successful_files,
+                    failed_files,
+                    skipped_files,
+                    status,
+                    started_at,
+                    completed_at,
+                    created_at
+                FROM indexing_jobs
+                WHERE id = :job_id
+                """
+            ),
+            {
+                "job_id": job_id,
+            },
+        ).mappings().first()
+
+    if not job:
+        raise HTTPException(
+            status_code=404,
+            detail="Indexing job not found",
+        )
+
+    total_files = int(job["total_files"])
+    processed_files = int(job["processed_files"])
+
+    if total_files > 0:
+        progress_percent = round(
+            (processed_files / total_files) * 100,
+            2,
+        )
+    else:
+        progress_percent = 100.0
+
+    return {
+        "id": str(job["id"]),
+        "total_files": total_files,
+        "processed_files": processed_files,
+        "successful_files": int(job["successful_files"]),
+        "failed_files": int(job["failed_files"]),
+        "skipped_files": int(job["skipped_files"]),
+        "status": job["status"],
+        "progress_percent": progress_percent,
+        "started_at": job["started_at"],
+        "completed_at": job["completed_at"],
+        "created_at": job["created_at"],
+    }
+
+
+# ---------------------------------------------------------
+# DIRECT IMAGE ANALYSIS
+# ---------------------------------------------------------
+
 
 @app.post("/assets/{asset_id}/analyze")
 def analyze_asset(asset_id: UUID):
@@ -62,7 +247,9 @@ def analyze_asset(asset_id: UUID):
                 WHERE id = :asset_id
                 """
             ),
-            {"asset_id": asset_id},
+            {
+                "asset_id": asset_id,
+            },
         ).mappings().first()
 
     if not asset:
@@ -131,6 +318,12 @@ def analyze_asset(asset_id: UUID):
             detail=f"AI analysis failed: {exc}",
         )
 
+
+# ---------------------------------------------------------
+# SEMANTIC SEARCH
+# ---------------------------------------------------------
+
+
 @app.get("/search")
 def search(
     q: str,
@@ -152,6 +345,12 @@ def search(
             status_code=400,
             detail=str(exc),
         )
+
+
+# ---------------------------------------------------------
+# ORIGINAL FILE / PREVIEW
+# ---------------------------------------------------------
+
 
 @app.get("/assets/{asset_id}/file")
 def get_asset_file_response(asset_id: UUID):
