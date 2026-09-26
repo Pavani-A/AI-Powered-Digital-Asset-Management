@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from sqlalchemy import text
-
+from backend.app.services.qdrant_service import ensure_collection, get_collection_info
 from backend.app.db.database import engine
 
 app = FastAPI(
@@ -25,4 +25,16 @@ def database_health_check():
     return {
         "status": "ok",
         "database": "postgresql",
+    }
+
+@app.get("/health/qdrant")
+def qdrant_health_check():
+    ensure_collection()
+    info = get_collection_info()
+
+    return {
+        "status": "ok",
+        "collection": "asset_embeddings",
+        "vectors_count": info.points_count,
+        "vector_size": 768,
     }
