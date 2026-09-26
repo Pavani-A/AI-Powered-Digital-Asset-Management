@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from sqlalchemy import text
 from backend.app.services.qdrant_service import ensure_collection, get_collection_info
 from backend.app.db.database import engine
+from backend.app.services.scanner_service import scan_library
 
 app = FastAPI(
     title="AI-Powered Digital Asset Management",
@@ -38,3 +39,6 @@ def qdrant_health_check():
         "vectors_count": info.points_count,
         "vector_size": 768,
     }
+@app.post("/index/scan")
+def scan_assets():
+    return scan_library("data")
