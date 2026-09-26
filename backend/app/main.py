@@ -6,6 +6,7 @@ from backend.app.services.scanner_service import scan_library
 from uuid import UUID
 from fastapi import HTTPException
 from backend.app.services.ollama_service import generate_image_description
+from backend.app.services.search_service import search_assets
 app = FastAPI(
     title="AI-Powered Digital Asset Management",
     version="0.1.0",
@@ -126,4 +127,26 @@ def analyze_asset(asset_id: UUID):
         raise HTTPException(
             status_code=500,
             detail=f"AI analysis failed: {exc}",
+        )
+
+@app.get("/search")
+def search(
+    q: str,
+    limit: int = 10,
+    file_type: str | None = None,
+):
+    try:
+        return {
+            "query": q,
+            "results": search_assets(
+                q,
+                limit=limit,
+                file_type=file_type,
+            ),
+        }
+
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
         )

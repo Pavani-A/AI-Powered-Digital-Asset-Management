@@ -7,7 +7,9 @@ from qdrant_client.models import (
     Filter,
     MatchValue,
 )
+from sqlalchemy import text
 
+from backend.app.db.database import SessionLocal
 from backend.app.services.embedding_service import generate_embedding
 from backend.app.services.qdrant_service import (
     COLLECTION_NAME,
@@ -22,10 +24,7 @@ def search_assets(
     file_type: str | None = None,
 ) -> list[dict[str, Any]]:
     """
-    Perform semantic search over indexed assets.
-
-    The user query is embedded using the same embedding model
-    used during indexing, then searched against Qdrant.
+    Perform semantic search and enrich the results with PostgreSQL metadata.
     """
     query = query.strip()
 
@@ -49,7 +48,7 @@ def search_assets(
             ]
         )
 
-    results = client.query_points(
+    points = client.query_points(
         collection_name=COLLECTION_NAME,
         query=query_vector,
         query_filter=query_filter,
@@ -57,12 +56,82 @@ def search_assets(
         limit=limit,
     ).points
 
-    return [
-        {
-            "asset_id": point.payload.get("asset_id"),
-            "filename": point.payload.get("filename"),
-            "file_type": point.payload.get("file_type"),
-            "score": point.score,
-        }
-        for point in results
+    if not points:
+        return []
+
+    asset_ids = [
+        point.payload.get("asset_id")
+        for point in points
+        if point.payload and point.payload.get("asset_id")
     ]
+
+    db = SessionLocal()
+
+    try:
+        assets_by_id: dict[str, dict[str, Any]] = {}
+
+        for asset_id in asset_ids:
+            asset = db.execute(
+                text(
+                    """
+                    SELECT
+                        id,
+                        filename,
+                        original_path,
+                        file_type,
+                        mime_type,
+                        size_bytes,
+                        width,
+                        height,
+                        duration_seconds,
+                        frame_rate,
+                        page_count,
+                        description,
+                        status
+                    FROM assets
+                    WHERE id = :asset_id
+                    """
+                ),
+                {"asset_id": asset_id},
+            ).mappings().first()
+
+            if asset:
+                assets_by_id[str(asset["id"])] = dict(asset)
+
+    finally:
+        db.close()
+
+    results: list[dict[str, Any]] = []
+
+    for point in points:
+        payload = point.payload or {}
+        asset_id = payload.get("asset_id")
+
+        if not asset_id:
+            continue
+
+        asset = assets_by_id.get(str(asset_id))
+
+        if not asset:
+            continue
+
+        results.append(
+            {
+                "asset_id": str(asset["id"]),
+                "filename": asset["filename"],
+                "file_type": asset["file_type"],
+                "mime_type": asset["mime_type"],
+                "size_bytes": asset["size_bytes"],
+                "width": asset["width"],
+                "height": asset["height"],
+                "duration_seconds": asset["duration_seconds"],
+                "frame_rate": asset["frame_rate"],
+                "page_count": asset["page_count"],
+                "description": asset["description"],
+                "status": asset["status"],
+                "original_path": asset["original_path"],
+                "score": point.score,
+            }
+        )
+
+    return results
