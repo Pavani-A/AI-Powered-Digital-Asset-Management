@@ -674,6 +674,16 @@ The project uses a locally stored mixed-media dataset containing:
 * Videos
 * PDFs
 
+The current dataset contains:
+
+| Asset Type | File Count | Size |
+|---|---:|---:|
+| Images | 2,005 | 0.52 GB |
+| PDFs | 93 | 0.01 GB |
+| Videos | 19 | 0.79 GB |
+| **Total** | **2,117** | **1.32 GB** |
+
+
 The dataset is stored under:
 
 ```text
