@@ -90,6 +90,7 @@ def search_assets(
                         status
                     FROM assets
                     WHERE id = :asset_id
+                     AND status = 'indexed'
                     """
                 ),
                 {"asset_id": asset_id},
