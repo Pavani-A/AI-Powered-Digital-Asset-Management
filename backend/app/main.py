@@ -99,6 +99,7 @@ def run_indexing_job(job_id: UUID) -> None:
                 FROM assets
                 WHERE status != 'indexed'
                 ORDER BY created_at ASC
+                LIMIT 5
                 """
             )
         ).scalars().all()
@@ -129,8 +130,13 @@ def start_indexing(background_tasks: BackgroundTasks):
             text(
                 """
                 SELECT COUNT(*)
+            FROM (
+                SELECT id
                 FROM assets
                 WHERE status != 'indexed'
+                ORDER BY created_at ASC
+                LIMIT 5
+            ) AS pending_assets
                 """
             )
         ).scalar_one()
